@@ -90,7 +90,8 @@ class MindfulAccessibilityService : AccessibilityService(), OnSharedPreferenceCh
         )
         shortsPlatformManager = ShortsPlatformManager(
             context = this,
-            blockedContentGoBack = this::goBackWithToast
+            blockedContentGoBack = this::goBackWithToast,
+            showBlockedToast = this::showBlockedToast
         )
         browserManager = BrowserManager(
             context = this,
@@ -228,6 +229,19 @@ class MindfulAccessibilityService : AccessibilityService(), OnSharedPreferenceCh
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    /**
+     * Shows the blocked content toast without performing any global action.
+     */
+    private fun showBlockedToast() {
+        ThreadUtils.runOnMainThread {
+            Toast.makeText(
+                this@MindfulAccessibilityService,
+                getString(R.string.toast_blocked_content),
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 

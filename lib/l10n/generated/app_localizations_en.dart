@@ -1164,13 +1164,13 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get restriction_groups_tab_info =>
-      'Set a combined screen time limit for a group of apps. Once the total usage reaches your limit, all apps in the group will be paused to help maintain focus and balance.';
+      'Set the same screen time limit for each app in a group. Every app is tracked on its own, and an app is paused once its own usage reaches the limit.';
 
   @override
-  String get restriction_group_time_spent_label => 'Time spent today';
+  String get restriction_group_time_spent_label => 'Most used app today';
 
   @override
-  String get restriction_group_time_left_label => 'Time left today';
+  String get restriction_group_time_left_label => 'Time left for that app';
 
   @override
   String get restriction_group_name_tile_title => 'Group name';
@@ -1184,7 +1184,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get restriction_group_timer_picker_dialog_info =>
-      'Set a daily time limit for this group. Once your limit is reached, all the apps in this group will be paused until midnight.';
+      'Set a daily time limit that applies to each app in this group separately. An app is paused until midnight once its own limit is reached.';
 
   @override
   String get restriction_group_active_period_tile_title =>

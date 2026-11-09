@@ -19,6 +19,7 @@ import com.mindful.android.helpers.device.NotificationHelper
 import com.mindful.android.helpers.device.PermissionsHelper
 import com.mindful.android.helpers.storage.SharedPrefsHelper
 import com.mindful.android.helpers.usages.AppsUsageHelper.getAppsUsageForInterval
+import com.mindful.android.helpers.storage.CooldownStore
 import com.mindful.android.models.AppRestriction
 import com.mindful.android.models.BedtimeSchedule
 import com.mindful.android.models.FocusSession
@@ -162,6 +163,36 @@ class FgMethodCallHandler(
                 )
                 updateTrackerServiceRestrictions(appRestrictions, null)
                 result.success(true)
+            }
+
+            "getAppCooldowns" -> {
+                result.success(CooldownStore.configsAsJson(context))
+            }
+
+            "updateAppCooldown" -> {
+                val args = call.arguments<Map<String, Any?>>()
+                val pkg = args?.get("appPackage") as? String
+                if (pkg == null) {
+                    result.success(false)
+                } else {
+                    CooldownStore.setConfig(
+                        context,
+                        pkg,
+                        CooldownStore.Config(
+                            useSec = (args["useSec"] as? Number)?.toInt() ?: 0,
+                            lockSec = (args["lockSec"] as? Number)?.toInt() ?: 0,
+                        )
+                    )
+
+                    // Make sure the tracker service is running to enforce it
+                    if (CooldownStore.hasConfigs(context)) {
+                        if (!trackerServiceConn.isActive) trackerServiceConn.startAndBind()
+                    } else if (trackerServiceConn.isActive) {
+                        // Last cooldown removed, let the service stop itself if idle
+                        trackerServiceConn.service?.getRestrictionManager?.updateRestrictions(null, null)
+                    }
+                    result.success(true)
+                }
             }
 
             "updateRestrictionsGroups" -> {
@@ -454,7 +485,7 @@ class FgMethodCallHandler(
                 appRestrictions,
                 restrictionGroups
             )
-        } else if (appRestrictions?.isNotEmpty() == true || restrictionGroups?.isNotEmpty() == true) {
+        } else if (appRestrictions?.isNotEmpty() == true || restrictionGroups?.isNotEmpty() == true || CooldownStore.hasConfigs(context)) {
             trackerServiceConn.setOnConnectedCallback { service ->
                 service.getRestrictionManager.updateRestrictions(
                     appRestrictions,

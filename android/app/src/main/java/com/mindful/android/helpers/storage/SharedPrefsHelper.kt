@@ -31,6 +31,7 @@ object SharedPrefsHelper {
     private const val UNIQUE_PREFS_BOX = "UniquePrefs"
     private const val PREF_KEY_NOTIFICATION_PERMISSION_COUNT = "notificationPermissionCount"
     private const val PREF_KEY_SHORTS_SCREEN_TIME = "shortsScreenTime"
+    private const val PREF_KEY_SHORTS_SCREEN_TIME_BY_PLATFORM = "shortsScreenTimeByPlatform"
     private const val PREF_KEY_DND_WAKE_LOCK = "dndWakeLock"
     private const val PREF_KEY_EXCLUDED_APPS = "excludedApps"
 
@@ -187,6 +188,49 @@ object SharedPrefsHelper {
 
         // fetch it
         return mUniquePrefs!!.getLong(PREF_KEY_SHORTS_SCREEN_TIME, 0L)
+    }
+
+
+    /**
+     * Fetches today's short content screen time of each platform, keyed by package name.
+     */
+    fun getShortsScreenTimeByPlatform(context: Context): Map<String, Long> {
+        checkAndInitializeUniquePrefs(context)
+        val json = mUniquePrefs!!.getString(PREF_KEY_SHORTS_SCREEN_TIME_BY_PLATFORM, null)
+            ?: return emptyMap()
+
+        return try {
+            val obj = JSONObject(json)
+            obj.keys().asSequence().associateWith { obj.optLong(it, 0L) }
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    /**
+     * Stores today's short content screen time of each platform. The single combined value
+     * read by the Flutter side is kept as the time of the most used platform.
+     */
+    fun setShortsScreenTimeByPlatform(context: Context, times: Map<String, Long>) {
+        checkAndInitializeUniquePrefs(context)
+        val obj = JSONObject()
+        times.forEach { (platform, ms) -> obj.put(platform, ms) }
+
+        mUniquePrefs!!.edit()
+            .putString(PREF_KEY_SHORTS_SCREEN_TIME_BY_PLATFORM, obj.toString())
+            .putLong(PREF_KEY_SHORTS_SCREEN_TIME, times.values.maxOrNull() ?: 0L)
+            .apply()
+    }
+
+    /**
+     * Clears the short content screen time of every platform.
+     */
+    fun resetShortsScreenTime(context: Context) {
+        checkAndInitializeUniquePrefs(context)
+        mUniquePrefs!!.edit()
+            .remove(PREF_KEY_SHORTS_SCREEN_TIME_BY_PLATFORM)
+            .putLong(PREF_KEY_SHORTS_SCREEN_TIME, 0L)
+            .apply()
     }
 
 

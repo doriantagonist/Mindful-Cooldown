@@ -80,7 +80,7 @@ class _CreateUpdateRestrictionGroupState
               (v) => v.value?.entries
                   .where((e) => _group.distractingApps.contains(e.key)),
             ))
-            ?.fold(0, (time, entry) => time + entry.value.screenTime) ??
+            ?.fold(0, (time, entry) => max(time, entry.value.screenTime)) ??
         0;
     final timeLeft = max(0, (_group.timerSec - timeSpent));
 

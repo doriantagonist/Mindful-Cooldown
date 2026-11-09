@@ -109,6 +109,29 @@ Future<int?> showRestrictionGroupTimerPicker({
   );
 }
 
+/// Animates the hero widget to a alert dialog containing duration picker for the app cooldown
+///
+/// Returns time in seconds and take initial time in seconds. Reset returns zero.
+Future<int?> showCooldownTimePicker({
+  required BuildContext context,
+  required Object heroTag,
+  required String title,
+  required String info,
+  required int initialTime,
+}) async =>
+    await Navigator.of(context).push<int>(
+      HeroPageRoute(
+        builder: (context) => _DurationPickerDialog(
+          title: title,
+          icon: const Icon(FluentIcons.timer_20_regular),
+          heroTag: heroTag,
+          initialTimeInSec: initialTime,
+          info: info,
+          positiveButtonLabel: context.locale.dialog_button_set,
+        ),
+      ),
+    );
+
 class _DurationPickerDialog extends StatefulWidget {
   const _DurationPickerDialog({
     required this.icon,

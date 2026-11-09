@@ -49,6 +49,8 @@
     <string name="app_paused_restriction_app_timer">App timer</string>
     <string name="app_paused_restriction_app_active_period">App active period</string>
     <string name="app_paused_restriction_group_timer">Group timer</string>
+    <string name="app_paused_restriction_cooldown">Cooldown</string>
+    <string name="app_paused_reason_cooldown" formatted="true">You\'ve used this app for your allowed time. Take a break, you can use it again at %1$s.</string>
     <string name="app_paused_restriction_group_active_period">Group active period</string>
 
     <string name="app_paused_overlay_button_emergency">Emergency</string>

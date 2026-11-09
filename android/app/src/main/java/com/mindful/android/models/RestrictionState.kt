@@ -22,4 +22,7 @@ data class RestrictionState(
 
     /** The type of reminder to show during app usage **/
     val reminderType: ReminderType = ReminderType.NONE,
+
+    /** Epoch millis when an active cooldown lock ends, only set for cooldown restrictions **/
+    val cooldownEndsAtMs: Long = -1L,
 )

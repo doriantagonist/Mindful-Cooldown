@@ -50,7 +50,7 @@ class RestrictionGroupCard extends ConsumerWidget {
                 )
                 .fold<int>(
                   0,
-                  (t, e) => (t + e.value.screenTime),
+                  (t, e) => max(t, e.value.screenTime),
                 ),
           ),
         ) ??

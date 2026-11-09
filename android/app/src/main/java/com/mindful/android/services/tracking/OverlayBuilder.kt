@@ -130,6 +130,7 @@ object OverlayBuilder {
                 RestrictionType.APP_ACTIVE_PERIOD -> R.string.app_paused_restriction_app_active_period
                 RestrictionType.GROUP_TIMER -> R.string.app_paused_restriction_group_timer
                 RestrictionType.GROUP_ACTIVE_PERIOD -> R.string.app_paused_restriction_group_active_period
+                RestrictionType.COOLDOWN -> R.string.app_paused_restriction_cooldown
             }
         )
 
@@ -258,6 +259,13 @@ object OverlayBuilder {
                 context.getString(
                     R.string.app_paused_reason_group_active_period_over,
                     state.groupName
+                )
+
+            RestrictionType.COOLDOWN ->
+                context.getString(
+                    R.string.app_paused_reason_cooldown,
+                    android.text.format.DateFormat.getTimeFormat(context)
+                        .format(java.util.Date(state.cooldownEndsAtMs))
                 )
         }
     }

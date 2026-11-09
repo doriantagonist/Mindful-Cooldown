@@ -57,6 +57,10 @@ class HeroTags {
   /// Tag used to identify the emergency tile in app dashboard screen.
   static const emergencyTileTag = "appDashboard.useEmergencyTile";
 
+  /// Generates a tag for an app cooldown tile based on the provided package name.
+  static String appCooldownTileTag(String package) =>
+      "appDashboard.cooldownTile.$package";
+
   /// Generates a tag for an app timer tile based on the provided package name.
   static String appTimerTileTag(String package) =>
       "appDashboard.timerTile.$package";

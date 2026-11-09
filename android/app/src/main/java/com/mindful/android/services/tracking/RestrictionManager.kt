@@ -5,6 +5,7 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.util.Log
 import com.mindful.android.enums.RestrictionType
+import com.mindful.android.helpers.storage.CooldownStore
 import com.mindful.android.helpers.usages.ScreenUsageHelper
 import com.mindful.android.models.AppRestriction
 import com.mindful.android.models.RestrictionGroup
@@ -23,6 +24,7 @@ class RestrictionManager(
                 && bedtimeApps.isEmpty()
                 && appsRestrictions.isEmpty()
                 && restrictionGroups.isEmpty()
+                && !CooldownStore.hasConfigs(context)
 
     // Restrictions
     private var appsRestrictions = HashMap<String, AppRestriction>()
@@ -37,12 +39,11 @@ class RestrictionManager(
     val getAppsLaunchCount: HashMap<String, Int> get() = appsLaunchCount
 
     private val alreadyRestrictedApps = HashMap<String, RestrictionState>(0)
-    private val alreadyRestrictedGroups = HashMap<Int, RestrictionState>(0)
 
     fun resetCache() {
         alreadyRestrictedApps.clear()
-        alreadyRestrictedGroups.clear()
         appsLaunchCount.clear()
+        CooldownStore.resetBaselines(context)
     }
 
     fun updateRestrictions(
@@ -57,8 +58,7 @@ class RestrictionManager(
 
         restrictionGroupsMap?.let {
             restrictionGroups = it
-            alreadyRestrictedGroups.clear()
-            Log.d(TAG, "updateRestrictions: Restriction groups updated")
+                Log.d(TAG, "updateRestrictions: Restriction groups updated")
         }
         stopIfNoUsage.invoke()
     }
@@ -84,8 +84,18 @@ class RestrictionManager(
             return alreadyRestrictedState
         }
 
-        // If no restrictions
-        val restriction = appsRestrictions[packageName] ?: return null
+        // An app with only a cooldown has no restriction row, so use an empty one
+        val cooldownConfig = CooldownStore.getConfig(context, packageName)
+        val restriction = appsRestrictions[packageName]
+            ?: if (cooldownConfig != null) AppRestriction(appPackage = packageName) else return null
+
+        // Locked by a running cooldown, checked first so blocked launches are not counted
+        if (cooldownConfig != null) {
+            val lockedUntilMs = CooldownStore.getState(context, packageName).lockedUntilMs
+            if (lockedUntilMs > System.currentTimeMillis()) {
+                return cooldownLockedState(lockedUntilMs)
+            }
+        }
 
         // Increment and Check app launch count
         val launchCount = appsLaunchCount.getOrDefault(packageName, 0) + 1
@@ -188,6 +198,9 @@ class RestrictionManager(
         // Usage map
         val screenUsage = ScreenUsageHelper.fetchAppUsageTodayTillNow(usageStatsManager)
 
+        /// Check app's cooldown
+        evaluateCooldown(restriction, screenUsage, futureStates)?.let { return it }
+
         /// Check for app timer
         if (restriction.timerSec > 0) {
             val screenTimeSec: Long = screenUsage[restriction.appPackage] ?: 0
@@ -220,37 +233,36 @@ class RestrictionManager(
         }
 
 
-        /// Check group's timer ran out
+        /// Check group's timer. The group limit applies to each app on its own,
+        /// so only this app's usage is compared against it.
         restrictionGroups[restriction.associatedGroupId]?.let { group ->
-            // If group is already restricted
-            if (alreadyRestrictedGroups.containsKey(group.id)) {
-                return alreadyRestrictedGroups[group.id]
-            }
-
             if (group.timerSec > 0) {
-                val groupScreenTimeSec = group.distractingApps.sumOf { screenUsage[it] ?: 0 }
+                val appScreenTimeSec: Long = screenUsage[restriction.appPackage] ?: 0
 
-                /// group timer ran out
-                if (groupScreenTimeSec >= group.timerSec) {
-                    Log.d(TAG, "evaluateScreenTimeLimit: App's timer is over")
+                /// This app used up the group's limit
+                if (appScreenTimeSec >= group.timerSec) {
+                    Log.d(
+                        TAG,
+                        "evaluateScreenTimeLimit: ${restriction.appPackage} used up ${group.groupName} group's per-app timer"
+                    )
                     val state = RestrictionState(
                         type = RestrictionType.GROUP_TIMER,
-                        screenTimeUsed = groupScreenTimeSec,
+                        screenTimeUsed = appScreenTimeSec,
                         screenTimeLimit = group.timerSec.toLong(),
                         reminderType = restriction.reminderType,
                         groupName = group.groupName,
                     )
 
-                    alreadyRestrictedGroups[group.id] = state
+                    alreadyRestrictedApps[restriction.appPackage] = state
                     return state
                 } else {
-                    /// group timer left so add expiration timestamp
-                    val leftAppLimitMs = (group.timerSec - groupScreenTimeSec) * 1000L
+                    /// Timer left for this app so add expiration timestamp
+                    val leftAppLimitMs = (group.timerSec - appScreenTimeSec) * 1000L
                     futureStates.add(
                         RestrictionState(
                             type = RestrictionType.GROUP_TIMER,
                             timeLeftMillis = leftAppLimitMs,
-                            screenTimeUsed = groupScreenTimeSec,
+                            screenTimeUsed = appScreenTimeSec,
                             screenTimeLimit = group.timerSec.toLong(),
                             reminderType = restriction.reminderType,
                             groupName = group.groupName,
@@ -260,6 +272,62 @@ class RestrictionManager(
             }
         }
 
+        return null
+    }
+
+    private fun cooldownLockedState(lockedUntilMs: Long) = RestrictionState(
+        type = RestrictionType.COOLDOWN,
+        cooldownEndsAtMs = lockedUntilMs,
+    )
+
+    /**
+     * Locks the app for the cooldown's lock time once it has been used for the cooldown's
+     * use time since the last lock ended. Otherwise adds a future state for the time left.
+     */
+    private fun evaluateCooldown(
+        restriction: AppRestriction,
+        screenUsage: Map<String, Long>,
+        futureStates: MutableSet<RestrictionState>,
+    ): RestrictionState? {
+        val packageName = restriction.appPackage
+        val config = CooldownStore.getConfig(context, packageName) ?: return null
+
+        val now = System.currentTimeMillis()
+        val usageSec: Long = screenUsage[packageName] ?: 0
+        var state = CooldownStore.getState(context, packageName)
+
+        // Lock is over, so a fresh use window starts from the current usage
+        if (state.lockedUntilMs in 1..now) {
+            state = CooldownStore.State(baselineSec = usageSec, lockedUntilMs = 0L)
+            CooldownStore.setState(context, packageName, state)
+        }
+
+        if (state.lockedUntilMs > now) return cooldownLockedState(state.lockedUntilMs)
+
+        val usedInWindowSec = (usageSec - state.baselineSec).coerceAtLeast(0L)
+
+        // Used up the allowed time so start the lock
+        if (usedInWindowSec >= config.useSec) {
+            val lockedUntilMs = now + config.lockSec * 1000L
+            CooldownStore.setState(
+                context,
+                packageName,
+                CooldownStore.State(baselineSec = usageSec, lockedUntilMs = lockedUntilMs)
+            )
+            Log.d(TAG, "evaluateCooldown: $packageName locked until $lockedUntilMs")
+            return cooldownLockedState(lockedUntilMs)
+        }
+
+        // Time left in this use window so add expiration timestamp
+        futureStates.add(
+            RestrictionState(
+                type = RestrictionType.COOLDOWN,
+                timeLeftMillis = (config.useSec - usedInWindowSec) * 1000L,
+                screenTimeUsed = usedInWindowSec,
+                screenTimeLimit = config.useSec.toLong(),
+                reminderType = restriction.reminderType,
+            )
+        )
         return null
     }
 }

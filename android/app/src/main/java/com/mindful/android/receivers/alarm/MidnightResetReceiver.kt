@@ -90,7 +90,7 @@ class MidnightResetReceiver : BroadcastReceiver() {
                     context.startService(serviceIntent)
                 } else {
                     // Else at least reset short content screen time
-                    SharedPrefsHelper.getSetShortsScreenTimeMs(context, 0L)
+                    SharedPrefsHelper.resetShortsScreenTime(context)
                 }
 
                 Log.d(TAG, "doWork: Midnight reset work completed successfully")

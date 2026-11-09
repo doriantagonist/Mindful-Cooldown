@@ -18,15 +18,24 @@ import org.jetbrains.annotations.Contract
 class ShortsPlatformManager(
     private val context: Context,
     private val blockedContentGoBack: () -> Unit,
+    private val showBlockedToast: () -> Unit,
 ) {
 
-    private var lastTimeShortsEvent = 0L
-    private var lastTimeSaved = 0L
-    private var shortContentScreenTime = SharedPrefsHelper.getSetShortsScreenTimeMs(context, null)
+    // Instagram needs a gentler exit than a system Back press (see leaveInstagramReels)
+    private var instagramActed = false
+    private var instagramActedAt = 0L
 
+    // Short content time is tracked separately for every platform (keyed by package name)
+    private val lastShortsEventAt = HashMap<String, Long>()
+    private var lastTimeSaved = 0L
+    private val shortsScreenTimeMs =
+        HashMap<String, Long>(SharedPrefsHelper.getShortsScreenTimeByPlatform(context))
+
+    @Synchronized
     fun resetShortsScreenTime() {
-        shortContentScreenTime = 0L
-        SharedPrefsHelper.getSetShortsScreenTimeMs(context, 0L)
+        shortsScreenTimeMs.clear()
+        lastShortsEventAt.clear()
+        SharedPrefsHelper.resetShortsScreenTime(context)
     }
 
     /**
@@ -60,9 +69,79 @@ class ShortsPlatformManager(
 
         if (isFeatureOpen) {
             maxAllowedDuration[resolvedPackage]?.let {
-                updateShortsScreenTime(wellbeing.allowedShortsTimeMs, it)
+                updateShortsScreenTime(
+                    platform = resolvedPackage,
+                    allowedShortContentTimeMs = wellbeing.allowedShortsTimeMs,
+                    maxAllowedDuration = it,
+                    onLimitReached = { onShortsBlocked(resolvedPackage, node) },
+                )
             }
+        } else if (resolvedPackage == INSTAGRAM_PACKAGE) {
+            // Reels is gone from screen, so the next visit may be acted on again
+            instagramActed = false
         }
+    }
+
+    /**
+     * Handles a blocked short-form feature. Instagram gets a one-shot in-app exit,
+     * every other platform keeps the original global Back behaviour.
+     */
+    private fun onShortsBlocked(packageName: String, root: AccessibilityNodeInfo) {
+        if (packageName != INSTAGRAM_PACKAGE) {
+            blockedContentGoBack.invoke()
+            return
+        }
+
+        // Act once per Reels visit. If Reels is still showing after the retry window
+        // the earlier action did not work, so try again.
+        val now = System.currentTimeMillis()
+        if (instagramActed && now - instagramActedAt < INSTAGRAM_RETRY_MS) return
+        instagramActed = true
+        instagramActedAt = now
+
+        if (leaveInstagramReels(root)) showBlockedToast()
+        else {
+            Log.d(TAG, "onShortsBlocked: no in-app exit found, falling back to global back")
+            blockedContentGoBack.invoke()
+        }
+    }
+
+    /**
+     * Leaves Instagram Reels without pressing the system Back button. A system Back from the
+     * Reels tab can close Instagram entirely, and Instagram then reopens on Reels, which
+     * blocks again, so the app could never be opened again.
+     *
+     * - Reels opened from the bottom tab: the tab bar is visible, so tap the Home tab.
+     * - Reels opened from the feed or a profile: no tab bar, but the viewer has its own
+     *   Back button as the first child of the start action buttons.
+     *
+     * @return true if an in-app control was clicked.
+     */
+    private fun leaveInstagramReels(root: AccessibilityNodeInfo): Boolean {
+        val homeTab = root
+            .findAccessibilityNodeInfosByViewId("$INSTAGRAM_PACKAGE:id/feed_tab")
+            .firstOrNull { it.isVisibleToUser }
+
+        if (homeTab != null) {
+            val clicked = homeTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Log.d(TAG, "leaveInstagramReels: tapped Home tab, success=$clicked")
+            return clicked
+        }
+
+        val backButton = root
+            .findAccessibilityNodeInfosByViewId("$INSTAGRAM_PACKAGE:id/clips_action_bar_start_action_buttons")
+            .firstOrNull()
+            ?.takeIf { it.childCount > 0 }
+            ?.getChild(0)
+            ?.takeIf { it.isClickable }
+
+        if (backButton != null) {
+            val clicked = backButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Log.d(TAG, "leaveInstagramReels: tapped viewer Back button, success=$clicked")
+            return clicked
+        }
+
+        return false
     }
 
     /**
@@ -73,68 +152,74 @@ class ShortsPlatformManager(
      * @return True if a blocked short-form content website is open, false otherwise.
      */
     fun checkAndBlockShortsOnBrowser(wellbeing: Wellbeing, url: String): Boolean {
-        when {
+        val platform: String? = when {
             PlatformFeatures.INSTAGRAM_REELS in wellbeing.blockedFeatures
-                    && doesUrlContainsAnyElement(mInstaReelUrls, url) -> true
+                    && doesUrlContainsAnyElement(mInstaReelUrls, url) -> INSTAGRAM_PACKAGE
 
             PlatformFeatures.INSTAGRAM_EXPLORE in wellbeing.blockedFeatures
-                    && doesUrlContainsAnyElement(mInstaExploreUrls, url) -> true
+                    && doesUrlContainsAnyElement(mInstaExploreUrls, url) -> INSTAGRAM_PACKAGE
 
             PlatformFeatures.YOUTUBE_SHORTS in wellbeing.blockedFeatures
-                    && doesUrlContainsAnyElement(mYtShortUrls, url) -> true
+                    && doesUrlContainsAnyElement(mYtShortUrls, url) -> YOUTUBE_PACKAGE
 
             PlatformFeatures.FACEBOOK_REELS in wellbeing.blockedFeatures
-                    && doesUrlContainsAnyElement(mFbReelUrls, url) -> true
+                    && doesUrlContainsAnyElement(mFbReelUrls, url) -> FACEBOOK_PACKAGE
 
             PlatformFeatures.SNAPCHAT_SPOTLIGHT in wellbeing.blockedFeatures
-                    && doesUrlContainsAnyElement(mSnapSpotlightUrls, url) -> true
+                    && doesUrlContainsAnyElement(mSnapSpotlightUrls, url) -> SNAPCHAT_PACKAGE
 
             PlatformFeatures.SNAPCHAT_DISCOVER in wellbeing.blockedFeatures
-                    && doesUrlContainsAnyElement(mSnapDiscoverUrls, url) -> true
+                    && doesUrlContainsAnyElement(mSnapDiscoverUrls, url) -> SNAPCHAT_PACKAGE
 
-            else -> false
-        }.let {
-            if (it) {
-                updateShortsScreenTime(wellbeing.allowedShortsTimeMs)
-                return true
-            }
+            else -> null
+        }
+
+        if (platform != null) {
+            updateShortsScreenTime(platform, wellbeing.allowedShortsTimeMs)
+            return true
         }
 
         return false
     }
 
     /**
-     * Updates the total screen time spent on short-form content and blocks access if the allowed time is exceeded.
+     * Updates the screen time spent on short-form content of one platform and blocks access
+     * if the allowed time is exceeded for that platform.
      *
-     * @param allowedShortContentTimeMs The maximum time allowed for short-form content.
+     * @param platform The package name of the platform whose time is tracked.
+     * @param allowedShortContentTimeMs The maximum time allowed for short-form content on each platform.
      * @param maxAllowedDuration The maximum duration considered for a single short-form content session.
      */
+    @Synchronized
     private fun updateShortsScreenTime(
+        platform: String,
         allowedShortContentTimeMs: Long,
         maxAllowedDuration: Long = 30 * 1000L,
+        onLimitReached: () -> Unit = blockedContentGoBack,
     ) {
+        val platformTimeMs = shortsScreenTimeMs[platform] ?: 0L
+
         // Check if limit is exhausted
-        if (allowedShortContentTimeMs < 0 || shortContentScreenTime > (allowedShortContentTimeMs + SAVING_INTERVAL_MS)) {
-            blockedContentGoBack.invoke()
+        if (allowedShortContentTimeMs < 0 || platformTimeMs > (allowedShortContentTimeMs + SAVING_INTERVAL_MS)) {
+            onLimitReached.invoke()
             return
         }
 
         // Calculate screen time since last check
         val currentTime = System.currentTimeMillis()
-        val elapsedTime = if (lastTimeShortsEvent != 0L) currentTime - lastTimeShortsEvent else 0
+        val lastEventAt = lastShortsEventAt[platform] ?: 0L
+        val elapsedTime = if (lastEventAt != 0L) currentTime - lastEventAt else 0
 
         // Update only if elapsedTime is less than MAX_ALLOWED_DURATION otherwise user may have closed short content,
-        shortContentScreenTime += (if (elapsedTime <= maxAllowedDuration) elapsedTime else 0)
-        lastTimeShortsEvent = currentTime
+        shortsScreenTimeMs[platform] =
+            platformTimeMs + (if (elapsedTime <= maxAllowedDuration) elapsedTime else 0)
+        lastShortsEventAt[platform] = currentTime
 
         // Check if the minimum interval has passed before calling shared preferences
         if ((currentTime - lastTimeSaved) > SAVING_INTERVAL_MS) {
-            SharedPrefsHelper.getSetShortsScreenTimeMs(context, shortContentScreenTime)
+            SharedPrefsHelper.setShortsScreenTimeByPlatform(context, HashMap(shortsScreenTimeMs))
             lastTimeSaved = currentTime
-            Log.d(
-                TAG,
-                "checkTimerAndBlockShortContent: shorts time saved: " + (shortContentScreenTime / 1000L) + " seconds"
-            )
+            Log.d(TAG, "updateShortsScreenTime: shorts time saved: $shortsScreenTimeMs")
         }
     }
 
@@ -144,6 +229,9 @@ class ShortsPlatformManager(
 
         // The minimum interval between saving short content's screen time in shared preferences
         private const val SAVING_INTERVAL_MS = (30 * 1000L)
+
+        // How long to wait before retrying if Reels is still on screen after leaving it
+        private const val INSTAGRAM_RETRY_MS = 2500L
 
         /**
          * Max allowed duration for each short content platform (based on the highest short length or duration)

@@ -80,6 +80,35 @@ class MethodChannelService {
       await _methodChannel.invokeMapMethod<String, int>('getAppsLaunchCount') ??
       {};
 
+  /// Gets the cooldown settings of apps as `[useSec, lockSec]` mapped to their package name.
+  Future<Map<String, List<int>>> getAppCooldowns() async {
+    final json =
+        await _methodChannel.invokeMethod<String>('getAppCooldowns') ?? '[]';
+    final result = <String, List<int>>{};
+
+    for (final item in jsonDecode(json) as List<dynamic>) {
+      final map = Map<String, dynamic>.from(item as Map);
+      result[map['appPackage'] as String] = [
+        map['useSec'] as int,
+        map['lockSec'] as int,
+      ];
+    }
+    return result;
+  }
+
+  /// Sets the cooldown of an app: locked for [lockSec] seconds after being used for [useSec]
+  /// seconds. Passing zero for either removes the cooldown.
+  Future<bool> updateAppCooldown(
+    String appPackage,
+    int useSec,
+    int lockSec,
+  ) async =>
+      await _methodChannel.invokeMethod('updateAppCooldown', {
+        'appPackage': appPackage,
+        'useSec': useSec,
+        'lockSec': lockSec,
+      });
+
   /// Gets the total short screen time for the device in milliseconds.
   ///
   /// This method retrieves the total screen time spent on short-form video apps
